@@ -172,16 +172,6 @@ export function costOf(model: string, usage: Usage, overrides?: Record<string, P
   }
 }
 
-/** What the cached tokens saved against the full input rate. */
-export function cacheSavings(model: string, usage: Usage, overrides?: Record<string, Price>): number {
-  const price = priceFor(model, overrides)
-  if (price === null) return 0
-  const cached = Math.min(nonNegative(usage.inputTokens), nonNegative(usage.cacheReadTokens))
-  const full = nonNegative(price.input)
-  const discounted = nonNegative(price.cacheRead ?? price.input)
-  return (cached * Math.max(0, full - discounted)) / 1_000_000
-}
-
 /** Parse the `priceOverrides` setting. Invalid JSON or rows are ignored. */
 export function parseOverrides(raw: unknown): Record<string, Price> {
   if (typeof raw !== 'string' || raw.trim() === '') return {}

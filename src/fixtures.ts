@@ -29,7 +29,6 @@ export const emptyStatus: Status = {
   },
   models: [model('mistral-large-4', 'Mistral Large 4', 1_048_576, ['completion chat', 'reasoning', 'vision'])],
   modelsSource: 'bundled',
-  ledger: { entries: [], today: 0, week: 0, month: 0, total: 0, cacheSavings: 0, byModel: [] },
   pricesUpdated: '2026-11-15',
   fetchedAt: Date.now()
 }
@@ -76,46 +75,6 @@ export const connectedStatus: Status = {
     model('codestral-embed-2505', 'Codestral Embed', 8_192, [])
   ],
   modelsSource: 'live',
-  ledger: {
-    entries: [
-      {
-        at: Date.now() - 4 * 60_000,
-        kind: 'fim',
-        model: 'codestral-latest',
-        inputTokens: 1_240,
-        outputTokens: 86,
-        cacheReadTokens: 1_024,
-        cost: 0.000_45,
-        priced: true
-      },
-      {
-        at: Date.now() - 38 * 60_000,
-        kind: 'ocr',
-        model: 'mistral-ocr-latest',
-        pages: 12,
-        cost: 0.048,
-        priced: true
-      },
-      {
-        at: Date.now() - 3 * 3_600_000,
-        kind: 'embed',
-        model: 'codestral-embed',
-        inputTokens: 18_400,
-        cost: 0.002_76,
-        priced: true
-      }
-    ],
-    today: 0.051_21,
-    week: 0.51,
-    month: 1.84,
-    total: 6.42,
-    cacheSavings: 0.000_31,
-    byModel: [
-      { model: 'mistral-ocr-latest', cost: 0.048, calls: 1 },
-      { model: 'codestral-embed', cost: 0.002_76, calls: 1 },
-      { model: 'codestral-latest', cost: 0.000_45, calls: 1 }
-    ]
-  },
   pricesUpdated: '2026-11-15',
   fetchedAt: Date.now()
 }

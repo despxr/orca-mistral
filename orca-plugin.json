@@ -3,8 +3,8 @@
   "manifestVersion": 2,
   "id": "mistral",
   "name": "Mistral",
-  "version": "1.0.2",
-  "description": "Mistral account budget, live model catalog, per-call cost ledger, OCR, embeddings and fill-in-the-middle, plus MISTRAL_API_KEY injection for the agents Orca launches.",
+  "version": "2.0.0",
+  "description": "Mistral account budget, live model prices and a cost calculator, plus MISTRAL_API_KEY injection for the agents Orca launches.",
   "author": {
     "name": "despxr",
     "url": "https://github.com/despxr"
@@ -14,7 +14,7 @@
   "icon": "assets/icon.png",
   "cover": {
     "path": "assets/cover.png",
-    "alt": "The Mistral panel showing a Vibe budget bar, API budget bar and today's estimated spend"
+    "alt": "The Mistral panel showing a Vibe budget bar, an API budget bar and the plan"
   },
   "engines": {
     "orca": ">=1.4.248"
@@ -40,10 +40,6 @@
       {
         "id": "mistral.test",
         "title": "Mistral: Test connection"
-      },
-      {
-        "id": "mistral.clearLedger",
-        "title": "Mistral: Clear local cost ledger"
       }
     ],
     "statusBarItems": [
@@ -52,7 +48,7 @@
         "text": "Mistral",
         "icon": "gauge",
         "tone": "neutral",
-        "tooltip": "Mistral usage and budget",
+        "tooltip": "Mistral budget and usage",
         "command": "mistral.refresh"
       }
     ],
@@ -82,7 +78,7 @@
       },
       {
         "key": "showStatusBar",
-        "title": "Show today's spend in the status bar",
+        "title": "Show budget in the status bar",
         "type": "boolean",
         "default": true
       },
@@ -109,24 +105,6 @@
         "default": "{}"
       },
       {
-        "key": "ocrModel",
-        "title": "OCR model",
-        "type": "string",
-        "default": "mistral-ocr-latest"
-      },
-      {
-        "key": "embedModel",
-        "title": "Embedding model",
-        "type": "string",
-        "default": "codestral-embed"
-      },
-      {
-        "key": "fimModel",
-        "title": "Fill-in-the-middle model",
-        "type": "string",
-        "default": "codestral-latest"
-      },
-      {
         "key": "priceOverrides",
         "title": "Price overrides",
         "description": "JSON object keyed by model id, with input, output, cacheRead, per1000Pages, per1000AnnotatedPages, perMinute or perMillionChars in USD.",
@@ -143,9 +121,6 @@
     ]
   },
   "capabilities": [
-    {
-      "kind": "storage:own"
-    },
     {
       "kind": "settings:own"
     },

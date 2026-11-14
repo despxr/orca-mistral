@@ -3,14 +3,12 @@ import {
   Badge,
   Button,
   Callout,
-  CodeView,
   EmptyState,
   Heading,
   IconButton,
   Input,
   KeyValue,
   Link,
-  Markdown,
   Progress,
   RelativeTime,
   Row,
@@ -22,15 +20,14 @@ import {
   Table,
   Tabs,
   Text,
-  Textarea,
   plugin,
   read,
   set,
   type PanelContext
 } from 'orca'
-import { costOf, formatContext, formatMoney, formatTokens, formatUSD, PRICES_SOURCE } from './prices'
+import { costOf, formatContext, formatMoney, formatUSD, PRICES_SOURCE } from './prices'
 import type { ModelInfo } from './models'
-import type { EmbedResult, FimResult, OcrResult, Status } from './types'
+import type { Status } from './types'
 
 const tab = atom('tab', 'usage')
 const status = atom<Status | null>(null)
@@ -45,19 +42,6 @@ const selectedModel = atom<string | null>(null)
 const calcModel = atom('calcModel', 'mistral-large-4')
 const calcInput = atom('calcInput', '10000')
 const calcOutput = atom('calcOutput', '1000')
-
-const ocrSource = atom('ocrSource', '')
-const ocrResult = atom<OcrResult | null>(null)
-const ocrBusy = atom(false)
-
-const embedText = atom('embedText', '')
-const embedResult = atom<EmbedResult | null>(null)
-const embedBusy = atom(false)
-
-const fimPrompt = atom('fimPrompt', '')
-const fimSuffix = atom('fimSuffix', '')
-const fimResult = atom<FimResult | null>(null)
-const fimBusy = atom(false)
 
 function messageOf(error: unknown): string {
   if (error !== null && typeof error === 'object' && 'message' in error) return String((error as { message: unknown }).message)
@@ -110,62 +94,6 @@ async function removeKey(): Promise<void> {
   }
 }
 
-async function runOcr(): Promise<void> {
-  set(ocrBusy, true)
-  set(ocrResult, null)
-  try {
-    set(ocrResult, await plugin.request('mistral.ocr', { source: read(ocrSource) }, { timeoutMs: 120_000 }))
-  } catch (cause) {
-    set(ocrResult, { ok: false, error: messageOf(cause) })
-  } finally {
-    set(ocrBusy, false)
-  }
-}
-
-async function runEmbed(): Promise<void> {
-  const texts = read(embedText)
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line !== '')
-  if (texts.length === 0) return
-  set(embedBusy, true)
-  set(embedResult, null)
-  try {
-    set(embedResult, await plugin.request('mistral.embed', { texts }))
-  } catch (cause) {
-    set(embedResult, { ok: false, error: messageOf(cause) })
-  } finally {
-    set(embedBusy, false)
-  }
-}
-
-async function runFim(): Promise<void> {
-  set(fimBusy, true)
-  set(fimResult, null)
-  try {
-    set(
-      fimResult,
-      await plugin.request('mistral.fim', {
-        prompt: read(fimPrompt),
-        suffix: read(fimSuffix),
-        maxTokens: 256
-      })
-    )
-  } catch (cause) {
-    set(fimResult, { ok: false, error: messageOf(cause) })
-  } finally {
-    set(fimBusy, false)
-  }
-}
-
-async function clearLedger(): Promise<void> {
-  try {
-    set(status, await plugin.request('mistral.clearLedger', {}))
-  } catch (cause) {
-    set(error, messageOf(cause))
-  }
-}
-
 export function setup(ctx: PanelContext): void {
   ctx.subscriptions.push(plugin.on('mistral.updated', () => void load(true)))
   void load()
@@ -203,9 +131,6 @@ export default function Panel() {
           </Tab>
           <Tab value="models" label="Models">
             <Models value={current} />
-          </Tab>
-          <Tab value="tools" label="Tools">
-            <Tools />
           </Tab>
           <Tab value="account" label="Account">
             <Account value={current} />
@@ -257,26 +182,6 @@ function Connect({ value }: { value: Status }) {
 
 function Usage({ value }: { value: Status }) {
   const account = value.account
-  const ledger = value.ledger
-  const spendRows = ledger.byModel.map((row) => ({
-    key: row.model,
-    cells: {
-      model: row.model,
-      calls: row.calls,
-      cost: formatUSD(row.cost)
-    }
-  }))
-  const callRows = ledger.entries.slice(0, 40).map((entry, index) => ({
-    key: `${entry.at}-${index}`,
-    cells: {
-      at: { type: 'relative' as const, at: entry.at },
-      kind: entry.kind,
-      model: entry.model,
-      tokens: formatTokens((entry.inputTokens ?? 0) + (entry.outputTokens ?? 0) + (entry.pages ?? 0)),
-      cost: entry.priced ? formatUSD(entry.cost) : 'unpriced'
-    }
-  }))
-
   return (
     <Stack gap="md">
       {account.ok ? (
@@ -314,6 +219,10 @@ function Usage({ value }: { value: Status }) {
               </Stack>
             ))
           )}
+          <Text size="xs" muted>
+            The status bar shows the highest-used window. Last refreshed{' '}
+            <RelativeTime at={account.fetchedAt ?? value.fetchedAt} format="short" />.
+          </Text>
         </Stack>
       ) : (
         <Callout tone="warning" title="Account usage unavailable">
@@ -323,52 +232,25 @@ function Usage({ value }: { value: Status }) {
 
       <Separator />
 
-      <Stack gap="sm">
-        <Text weight="semibold">This plugin's calls</Text>
-        <KeyValue
-          items={[
-            { label: 'Today', value: formatUSD(ledger.today), tone: ledger.today > 0 ? 'accent' : undefined },
-            { label: 'Last 7 days', value: formatUSD(ledger.week) },
-            { label: 'This month', value: formatUSD(ledger.month) },
-            { label: 'Cache savings', value: formatUSD(ledger.cacheSavings), tone: 'success' }
-          ]}
-        />
-        <Text size="xs" muted>
-          Estimated from the token counts Mistral returned. The account budget above is authoritative.
-        </Text>
-      </Stack>
+      <KeyValue
+        items={[
+          { label: 'Plan', value: account.plan ?? 'unknown' },
+          { label: 'Currency', value: account.currency },
+          { label: 'Endpoint', value: value.baseURL, code: true },
+          {
+            label: 'Key source',
+            value: value.keySource === 'secret' ? 'Orca secrets' : value.keySource === 'env' ? 'Environment' : 'None'
+          }
+        ]}
+      />
 
-      {spendRows.length > 0 ? (
-        <Table
-          label="Spend by model"
-          columns={[
-            { key: 'model', label: 'Model', minWidth: 'md' },
-            { key: 'calls', label: 'Calls', align: 'end' },
-            { key: 'cost', label: 'Cost', align: 'end' }
-          ]}
-          rows={spendRows}
-        />
-      ) : null}
-
-      {callRows.length > 0 ? (
-        <Table
-          label="Recent calls"
-          columns={[
-            { key: 'at', label: 'When' },
-            { key: 'kind', label: 'Kind', hideBelow: 'sm' },
-            { key: 'model', label: 'Model', minWidth: 'md' },
-            { key: 'tokens', label: 'Units', align: 'end', hideBelow: 'sm' },
-            { key: 'cost', label: 'Cost', align: 'end' }
-          ]}
-          rows={callRows}
-        />
-      ) : (
+      {account.ok && account.windows.length === 0 ? (
         <EmptyState
-          title="No calls recorded yet"
-          description="OCR, embeddings and FIM calls from the Tools tab appear here with their estimated cost."
+          title="No budget windows"
+          description="This account has no Vibe or API allowance to show. Usage may still be billed through the API."
           icon="gauge"
         />
-      )}
+      ) : null}
     </Stack>
   )
 }
@@ -440,10 +322,6 @@ function ModelDetail({ model }: { model: ModelInfo }) {
     {
       label: 'Output',
       value: model.price?.output === undefined ? 'unknown' : `$${model.price.output} /M tokens`
-    },
-    {
-      label: 'OCR',
-      value: model.price?.per1000Pages === undefined ? '—' : `$${model.price.per1000Pages} /1k pages`
     }
   ]
   return (
@@ -515,145 +393,6 @@ function Calculator({ models }: { models: ModelInfo[] }) {
   )
 }
 
-function Tools() {
-  const ocr = read(ocrResult)
-  const embed = read(embedResult)
-  const fim = read(fimResult)
-  return (
-    <Stack gap="md">
-      <Stack gap="sm">
-        <Text weight="semibold">OCR</Text>
-        <Text size="xs" muted>
-          A PDF or image URL (or a data: URL) becomes markdown, billed per page instead of vision tokens.
-        </Text>
-        <Input
-          label="Document URL"
-          placeholder="https://…/document.pdf"
-          value={read(ocrSource)}
-          onChange={(next) => set(ocrSource, next)}
-        />
-        <Button
-          icon="file-text"
-          onPress={() => void runOcr()}
-          disabled={read(ocrBusy) || read(ocrSource).trim() === ''}
-        >
-          {read(ocrBusy) ? 'Extracting…' : 'Extract markdown'}
-        </Button>
-        {ocr === null ? null : ocr.ok ? (
-          <Stack gap="xs">
-            <KeyValue
-              items={[
-                { label: 'Pages', value: ocr.pages },
-                { label: 'Model', value: ocr.model, code: true },
-                { label: 'Cost', value: ocr.priced ? formatUSD(ocr.cost) : 'unpriced', tone: 'accent' }
-              ]}
-            />
-            {ocr.markdown === '' ? (
-              <Text size="xs" muted>
-                No text was found in the document.
-              </Text>
-            ) : (
-              <Markdown content={ocr.markdown.slice(0, 60_000)} />
-            )}
-            {ocr.truncated ? (
-              <Text size="xs" tone="warning">
-                The extraction was long; the panel shows the first 60,000 characters.
-              </Text>
-            ) : null}
-          </Stack>
-        ) : (
-          <Callout tone="danger" title="OCR failed">
-            {ocr.error}
-          </Callout>
-        )}
-      </Stack>
-
-      <Separator />
-
-      <Stack gap="sm">
-        <Text weight="semibold">Embeddings</Text>
-        <Textarea
-          label="Texts, one per line"
-          rows={4}
-          value={read(embedText)}
-          onChange={(next) => set(embedText, next)}
-        />
-        <Button
-          icon="layers"
-          onPress={() => void runEmbed()}
-          disabled={read(embedBusy) || read(embedText).trim() === ''}
-        >
-          {read(embedBusy) ? 'Embedding…' : 'Embed texts'}
-        </Button>
-        {embed === null ? null : embed.ok ? (
-          <Stack gap="xs">
-            <KeyValue
-              items={[
-                { label: 'Vectors', value: embed.count },
-                { label: 'Dimensions', value: embed.dimensions },
-                { label: 'Input tokens', value: embed.tokens },
-                { label: 'Cost', value: embed.priced ? formatUSD(embed.cost) : 'unpriced', tone: 'accent' }
-              ]}
-            />
-            <CodeView
-              label="First vector (8 of many)"
-              code={JSON.stringify(embed.preview)}
-              language="json"
-              lineNumbers={false}
-            />
-          </Stack>
-        ) : (
-          <Callout tone="danger" title="Embedding failed">
-            {embed.error}
-          </Callout>
-        )}
-      </Stack>
-
-      <Separator />
-
-      <Stack gap="sm">
-        <Text weight="semibold">Fill in the middle</Text>
-        <Textarea
-          label="Code before the cursor"
-          rows={5}
-          value={read(fimPrompt)}
-          onChange={(next) => set(fimPrompt, next)}
-        />
-        <Input
-          label="Code after the cursor"
-          placeholder="Optional"
-          value={read(fimSuffix)}
-          onChange={(next) => set(fimSuffix, next)}
-        />
-        <Button
-          icon="code"
-          onPress={() => void runFim()}
-          disabled={read(fimBusy) || read(fimPrompt).trim() === ''}
-        >
-          {read(fimBusy) ? 'Completing…' : 'Complete'}
-        </Button>
-        {fim === null ? null : fim.ok ? (
-          <Stack gap="xs">
-            <CodeView label="Completion" code={fim.completion} lineNumbers={false} wrap />
-            <KeyValue
-              items={[
-                { label: 'Model', value: fim.model, code: true },
-                { label: 'Input tokens', value: fim.inputTokens },
-                { label: 'Output tokens', value: fim.outputTokens },
-                { label: 'Cost', value: fim.priced ? formatUSD(fim.cost) : 'unpriced', tone: 'accent' }
-              ]}
-            />
-          </Stack>
-        ) : (
-          <Callout tone="danger" title="Completion failed">
-            {fim.error}
-          </Callout>
-        )}
-      </Stack>
-    </Stack>
-  )
-}
-
 function Account({ value }: { value: Status }) {
   return (
     <Stack gap="md">
@@ -719,23 +458,11 @@ function Account({ value }: { value: Status }) {
       <Separator />
 
       <Stack gap="xs">
-        <Text weight="semibold">Local ledger</Text>
-        <Text size="xs" muted>
-          {value.ledger.entries.length} calls recorded, {formatUSD(value.ledger.total)} estimated. Prices read{' '}
-          {value.pricesUpdated}.
-        </Text>
-        <Button variant="ghost" onPress={() => void clearLedger()} disabled={value.ledger.entries.length === 0}>
-          Clear local ledger
-        </Button>
-      </Stack>
-
-      <Separator />
-
-      <Stack gap="xs">
         <Text weight="semibold">Agent launch hook</Text>
         <Text size="xs" muted>
           With “Inject API key” on, agents Orca launches from the configured list receive MISTRAL_API_KEY
-          from the same key this panel uses. Manage the list in Settings → Plugins → Mistral.
+          from the same key this panel uses. Manage the list and per-agent arguments in Settings → Plugins
+          → Mistral.
         </Text>
         <Text size="xs" muted>
           Last refreshed <RelativeTime at={value.fetchedAt} format="short" />

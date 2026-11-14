@@ -1,40 +1,20 @@
 /**
  * The Mistral plugin worker.
  *
- * It reads the account budget from Mistral's billing endpoints, keeps a live
- * model catalog, records what the plugin's own calls cost, drives the status
- * bar, and injects the API key into agents Orca launches.
+ * Reads the account budget from Mistral's billing endpoints, keeps a live model
+ * catalog with prices, drives the status bar, and injects the API key into the
+ * agents Orca launches.
  */
 import type { OrcaWorkerApi } from 'orca/worker'
 import { groupModels, fallbackModels, type ApiModel, type ModelInfo } from './models'
-import {
-  cacheSavings,
-  costOf,
-  formatUSD,
-  parseOverrides,
-  PRICES_UPDATED,
-  type Price,
-} from './prices'
-import type {
-  AccountStatus,
-  BudgetWindow,
-  EmbedResult,
-  FimResult,
-  LedgerEntry,
-  LedgerSummary,
-  OcrResult,
-  Protection,
-  SaveKeyResult,
-  Status,
-} from './types'
+import { formatMoney, parseOverrides, PRICES_UPDATED, type Price } from './prices'
+import type { AccountStatus, BudgetWindow, Protection, SaveKeyResult, Status } from './types'
 
 declare const process: { env: Record<string, string | undefined> }
 
 const DEFAULT_BASE = 'https://api.mistral.ai/v1'
 const DEFAULT_ENV = 'MISTRAL_API_KEY'
-const LEDGER_KEY = 'ledger'
 const SECRET_KEY = 'apiKey'
-const LEDGER_LIMIT = 500
 const BILLING_TTL_MS = 30_000
 const MODELS_TTL_MS = 60 * 60_000
 
@@ -104,7 +84,10 @@ function baseURL(settings: Settings): string {
   }
 }
 
-async function apiKey(orca: OrcaWorkerApi, settings?: Settings): Promise<{ key: string | null; source: 'secret' | 'env' | 'none' }> {
+async function apiKey(
+  orca: OrcaWorkerApi,
+  settings?: Settings
+): Promise<{ key: string | null; source: 'secret' | 'env' | 'none' }> {
   try {
     const stored = await orca.secrets.get(SECRET_KEY)
     if (typeof stored === 'string' && stored.trim() !== '') return { key: stored.trim(), source: 'secret' }
@@ -131,29 +114,10 @@ async function apiGet(key: string, base: string, path: string, timeoutMs = 20_00
     headers: {
       authorization: `Bearer ${key}`,
       accept: 'application/json',
-      'user-agent': 'orca-mistral/1.0',
+      'user-agent': 'orca-mistral/2.0',
     },
     signal: AbortSignal.timeout(timeoutMs),
   })
-  return readResponse(response, path)
-}
-
-async function apiPost(key: string, base: string, path: string, body: unknown, timeoutMs = 120_000): Promise<unknown> {
-  const response = await fetch(`${base}${path}`, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${key}`,
-      accept: 'application/json',
-      'content-type': 'application/json',
-      'user-agent': 'orca-mistral/1.0',
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(timeoutMs),
-  })
-  return readResponse(response, path)
-}
-
-async function readResponse(response: Response, path: string): Promise<unknown> {
   const text = await response.text()
   let body: unknown
   try {
@@ -241,89 +205,6 @@ async function fetchModels(key: string, base: string, overrides: Record<string, 
   return groupModels(data, overrides)
 }
 
-function isLedgerEntry(value: unknown): value is LedgerEntry {
-  const row = recordOf(value)
-  if (row === null) return false
-  return (
-    Number.isFinite(Number(row.at)) &&
-    Number.isFinite(Number(row.cost)) &&
-    typeof row.kind === 'string' &&
-    typeof row.model === 'string'
-  )
-}
-
-async function readLedger(orca: OrcaWorkerApi): Promise<LedgerEntry[]> {
-  const raw = await orca.storage.get(LEDGER_KEY)
-  return Array.isArray(raw) ? raw.filter(isLedgerEntry) : []
-}
-
-async function ledgerSummary(orca: OrcaWorkerApi, overrides: Record<string, Price>): Promise<LedgerSummary> {
-  const entries = await readLedger(orca)
-  const now = new Date()
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime()
-  const weekAgo = now.getTime() - 7 * 86_400_000
-
-  let today = 0
-  let week = 0
-  let month = 0
-  let total = 0
-  let savings = 0
-  const byModel = new Map<string, { cost: number; calls: number }>()
-
-  for (const entry of entries) {
-    const cost = nonNegative(entry.cost)
-    total += cost
-    if (entry.at >= startOfToday) today += cost
-    if (entry.at >= weekAgo) week += cost
-    if (entry.at >= startOfMonth) month += cost
-    savings += cacheSavings(
-      entry.model,
-      { inputTokens: entry.inputTokens, cacheReadTokens: entry.cacheReadTokens },
-      overrides,
-    )
-    const row = byModel.get(entry.model) ?? { cost: 0, calls: 0 }
-    row.cost += cost
-    row.calls += 1
-    byModel.set(entry.model, row)
-  }
-
-  return {
-    entries: [...entries].sort((a, b) => b.at - a.at),
-    today,
-    week,
-    month,
-    total,
-    cacheSavings: savings,
-    byModel: [...byModel.entries()]
-      .map(([model, row]) => ({ model, cost: row.cost, calls: row.calls }))
-      .sort((a, b) => b.cost - a.cost),
-  }
-}
-
-async function record(orca: OrcaWorkerApi, entry: LedgerEntry): Promise<void> {
-  const entries = await readLedger(orca)
-  entries.push(entry)
-  await orca.storage.set(LEDGER_KEY, entries.slice(-LEDGER_LIMIT))
-  post(orca, 'mistral.updated', { fetchedAt: Date.now() })
-}
-
-function post(orca: OrcaWorkerApi, event: 'mistral.updated', payload: { fetchedAt: number }): void {
-  try {
-    orca.panels.post(event, payload)
-  } catch {
-    // No panel is open; nothing to tell.
-  }
-}
-
-async function safeStatusBar(orca: OrcaWorkerApi, params: Record<string, unknown>): Promise<void> {
-  try {
-    await orca.host.call('statusBar.update', params as never)
-  } catch {
-    // Browser clients and older Orca have no status bar.
-  }
-}
-
 let billingCache: { at: number; key: string; value: AccountStatus } | null = null
 let modelsCache: { at: number; key: string; value: ModelInfo[] } | null = null
 
@@ -338,7 +219,6 @@ async function status(orca: OrcaWorkerApi, { force = false } = {}): Promise<Stat
   const base = baseURL(settings)
   const { key, source } = await apiKey(orca, settings)
   const protection = await protectionOf(orca)
-  const ledger = await ledgerSummary(orca, overrides)
 
   let account: AccountStatus
   let models: ModelInfo[]
@@ -386,30 +266,53 @@ async function status(orca: OrcaWorkerApi, { force = false } = {}): Promise<Stat
     models,
     modelsSource,
     modelsError,
-    ledger,
     pricesUpdated: PRICES_UPDATED,
     fetchedAt: Date.now(),
   }
 }
 
+function accountSummary(value: Status): string {
+  if (!value.configured) return 'Mistral: no API key configured'
+  if (!value.account.ok || value.account.windows.length === 0) {
+    return `Mistral: ${value.account.error ?? 'no budget data'}`
+  }
+  return `Mistral ${value.account.plan ?? 'API'}: ${value.account.windows
+    .map((window) => `${window.label} ${formatMoney(window.used ?? 0, window.unit)}/${formatMoney(window.total ?? 0, window.unit)} (${(window.percent ?? 0).toFixed(1)}%)`)
+    .join(' · ')}`
+}
+
+async function safeStatusBar(orca: OrcaWorkerApi, params: Record<string, unknown>): Promise<void> {
+  try {
+    await orca.host.call('statusBar.update', params as never)
+  } catch {
+    // Browser clients and older Orca have no status bar.
+  }
+}
+
 async function updateStatusBar(orca: OrcaWorkerApi, value: Status): Promise<void> {
   const settings = await readSettings(orca)
-  if (bool(settings, 'showStatusBar', true) === false || !value.configured) {
+  if (!value.configured || bool(settings, 'showStatusBar', true) === false) {
     await safeStatusBar(orca, { id: 'spend', visible: false })
     return
   }
-  const worst = value.account.windows.reduce((max, window) => Math.max(max, window.percent ?? 0), 0)
-  const tone = worst >= 90 ? 'danger' : worst >= 75 ? 'warning' : 'neutral'
-  const tooltip = value.account.ok
-    ? `Mistral plugin calls today: ${formatUSD(value.ledger.today)} · ${value.account.windows
-        .map((window) => `${window.label} ${(window.percent ?? 0).toFixed(1)}%`)
-        .join(' · ')}`
-    : `Mistral plugin calls today: ${formatUSD(value.ledger.today)} · ${value.account.error ?? 'usage unavailable'}`
+  if (!value.account.ok || value.account.windows.length === 0) {
+    await safeStatusBar(orca, {
+      id: 'spend',
+      text: 'Mistral',
+      tone: 'warning',
+      tooltip: value.account.error ?? 'Mistral usage unavailable',
+      visible: true,
+    })
+    return
+  }
+  const worst = [...value.account.windows].sort((a, b) => (b.percent ?? 0) - (a.percent ?? 0))[0]
+  const percent = worst.percent ?? 0
+  const tone = percent >= 90 ? 'danger' : percent >= 75 ? 'warning' : 'neutral'
   await safeStatusBar(orca, {
     id: 'spend',
-    text: `${formatUSD(value.ledger.today)} today`,
+    text: `${formatMoney(worst.used ?? 0, worst.unit)} / ${formatMoney(worst.total ?? 0, worst.unit)}`,
     tone,
-    tooltip,
+    tooltip: accountSummary(value),
     visible: true,
   })
 }
@@ -422,10 +325,9 @@ async function primeStatusBar(orca: OrcaWorkerApi): Promise<void> {
       await safeStatusBar(orca, { id: 'spend', visible: false })
       return
     }
-    const ledger = await ledgerSummary(orca, parseOverrides(settings.priceOverrides))
     await safeStatusBar(orca, {
       id: 'spend',
-      text: `${formatUSD(ledger.today)} today`,
+      text: 'Mistral',
       tone: 'neutral',
       tooltip: 'Mistral: refreshing usage…',
       visible: true,
@@ -442,6 +344,27 @@ async function tick(orca: OrcaWorkerApi): Promise<void> {
     post(orca, 'mistral.updated', { fetchedAt: Date.now() })
   } catch (error) {
     orca.log(`[mistral] refresh failed: ${messageOf(error)}`)
+  }
+}
+
+function post(orca: OrcaWorkerApi, event: 'mistral.updated', payload: { fetchedAt: number }): void {
+  try {
+    orca.panels.post(event, payload)
+  } catch {
+    // No panel is open; nothing to tell.
+  }
+}
+
+function launchArgsFor(settings: Settings, agent: string): string {
+  const raw = settings.launchArgs
+  if (typeof raw !== 'string' || raw.trim() === '') return ''
+  try {
+    const value: unknown = JSON.parse(raw)
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return ''
+    const args = (value as Record<string, unknown>)[agent]
+    return typeof args === 'string' ? args.trim() : ''
+  } catch {
+    return ''
   }
 }
 
@@ -462,38 +385,6 @@ function schedule(orca: OrcaWorkerApi): void {
   })()
 }
 
-function ocrDocument(source: string): Record<string, string> {
-  if (/^data:/i.test(source)) {
-    const mime = /^data:([^;,]+)/i.exec(source)?.[1]?.toLowerCase() ?? ''
-    return mime.startsWith('image/')
-      ? { type: 'image_url', image_url: source }
-      : { type: 'document_url', document_url: source }
-  }
-  const path = source.split('?')[0].toLowerCase()
-  return /\.(png|jpe?g|webp|gif|bmp|tiff?)$/.test(path)
-    ? { type: 'image_url', image_url: source }
-    : { type: 'document_url', document_url: source }
-}
-
-function launchArgsFor(settings: Settings, agent: string): string {
-  const raw = settings.launchArgs
-  if (typeof raw !== 'string' || raw.trim() === '') return ''
-  try {
-    const value: unknown = JSON.parse(raw)
-    if (value === null || typeof value !== 'object' || Array.isArray(value)) return ''
-    const args = (value as Record<string, unknown>)[agent]
-    return typeof args === 'string' ? args.trim() : ''
-  } catch {
-    return ''
-  }
-}
-
-function errorResult(error: unknown, code: string): { ok: false; error: string } {
-  const message = messageOf(error)
-  if (error instanceof PluginError && error.code === code) return { ok: false, error: message }
-  return { ok: false, error: message }
-}
-
 export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   stopped = false
   orca.panels.handle('mistral.status', async () => jsonSafe(await status(orca)))
@@ -506,7 +397,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     } catch (error) {
       return {
         ok: false,
-        error: `${messageOf(error)} — set MISTRAL_API_KEY in the environment instead, then reopen the panel.`,
+        error: `${messageOf(error)} — set ${str(await readSettings(orca), 'apiKeyEnv', DEFAULT_ENV)} in the environment instead, then reopen the panel.`,
       }
     }
     invalidate()
@@ -527,159 +418,21 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     return jsonSafe(next)
   })
 
-  orca.panels.handle('mistral.ocr', async ({ source }): Promise<OcrResult> => {
-    const value = String(source ?? '').trim()
-    if (value === '') throw new PluginError('invalid_params', 'Paste a document URL or a data: URL.')
-    const settings = await readSettings(orca)
-    const overrides = parseOverrides(settings.priceOverrides)
-    const model = str(settings, 'ocrModel', 'mistral-ocr-latest')
-    const { key } = await apiKey(orca, settings)
-    if (key === null) throw new PluginError('action_failed', 'No Mistral API key is configured.')
-
-    try {
-      const body = recordOf(await apiPost(key, baseURL(settings), '/ocr', { model, document: ocrDocument(value) }))
-      const pages = Array.isArray(body?.pages) ? (body.pages as unknown[]) : []
-      const full = pages
-        .map((page) => String(recordOf(page)?.markdown ?? ''))
-        .filter((text) => text !== '')
-        .join('\n\n')
-      const truncated = full.length > 200_000
-      const markdown = truncated ? full.slice(0, 200_000) : full
-      const usage = recordOf(body?.usage_info)
-      const pageCount = nonNegative(usage?.pages_processed) || pages.length
-      const cost = costOf(model, { pages: pageCount }, overrides)
-      await record(orca, {
-        at: Date.now(),
-        kind: 'ocr',
-        model,
-        pages: pageCount,
-        cost: cost.total,
-        priced: cost.priced,
-      })
-      return jsonSafe({ ok: true, model, markdown, truncated, pages: pageCount, cost: cost.total, priced: cost.priced })
-    } catch (error) {
-      return errorResult(error, 'invalid_params') as OcrResult
-    }
-  })
-
-  orca.panels.handle('mistral.embed', async ({ texts }): Promise<EmbedResult> => {
-    const cleaned = (Array.isArray(texts) ? texts : [])
-      .map((text) => String(text ?? '').trim())
-      .filter((text) => text !== '')
-      .slice(0, 64)
-    if (cleaned.length === 0) throw new PluginError('invalid_params', 'Add at least one line of text.')
-    const settings = await readSettings(orca)
-    const overrides = parseOverrides(settings.priceOverrides)
-    const model = str(settings, 'embedModel', 'codestral-embed')
-    const { key } = await apiKey(orca, settings)
-    if (key === null) throw new PluginError('action_failed', 'No Mistral API key is configured.')
-
-    try {
-      const body = recordOf(await apiPost(key, baseURL(settings), '/embeddings', { model, input: cleaned }))
-      const data = Array.isArray(body?.data) ? (body.data as unknown[]) : []
-      const usage = recordOf(body?.usage)
-      const tokens = nonNegative(usage?.prompt_tokens)
-      const first = recordOf(data[0])
-      const vector = Array.isArray(first?.embedding) ? (first.embedding as unknown[]) : []
-      const cost = costOf(model, { inputTokens: tokens }, overrides)
-      await record(orca, {
-        at: Date.now(),
-        kind: 'embed',
-        model,
-        inputTokens: tokens,
-        cost: cost.total,
-        priced: cost.priced,
-      })
-      return jsonSafe({
-        ok: true,
-        model,
-        count: data.length,
-        dimensions: vector.length,
-        tokens,
-        cost: cost.total,
-        priced: cost.priced,
-        preview: vector.slice(0, 8).map((n) => Number(Number(n).toFixed(5))),
-      })
-    } catch (error) {
-      return errorResult(error, 'invalid_params') as EmbedResult
-    }
-  })
-
-  orca.panels.handle('mistral.fim', async ({ prompt, suffix, maxTokens }): Promise<FimResult> => {
-    const value = String(prompt ?? '')
-    if (value.trim() === '') throw new PluginError('invalid_params', 'Add the code before the cursor.')
-    const settings = await readSettings(orca)
-    const overrides = parseOverrides(settings.priceOverrides)
-    const model = str(settings, 'fimModel', 'codestral-latest')
-    const { key } = await apiKey(orca, settings)
-    if (key === null) throw new PluginError('action_failed', 'No Mistral API key is configured.')
-
-    try {
-      const body = recordOf(
-        await apiPost(key, baseURL(settings), '/fim/completions', {
-          model,
-          prompt: value,
-          suffix: String(suffix ?? ''),
-          max_tokens: clamp(Number(maxTokens) || 256, 1, 2048),
-        }),
-      )
-      const choices = Array.isArray(body?.choices) ? (body.choices as unknown[]) : []
-      const completion = String(recordOf(recordOf(choices[0])?.message)?.content ?? '')
-      const usage = recordOf(body?.usage)
-      const inputTokens = nonNegative(usage?.prompt_tokens)
-      const outputTokens = nonNegative(usage?.completion_tokens)
-      const details = recordOf(usage?.prompt_tokens_details)
-      const cacheReadTokens = nonNegative(details?.cached_tokens)
-      const cost = costOf(model, { inputTokens, outputTokens, cacheReadTokens }, overrides)
-      await record(orca, {
-        at: Date.now(),
-        kind: 'fim',
-        model,
-        inputTokens,
-        outputTokens,
-        cacheReadTokens,
-        cost: cost.total,
-        priced: cost.priced,
-      })
-      return jsonSafe({ ok: true, model, completion, inputTokens, outputTokens, cost: cost.total, priced: cost.priced })
-    } catch (error) {
-      return errorResult(error, 'invalid_params') as FimResult
-    }
-  })
-
-  orca.panels.handle('mistral.clearLedger', async () => {
-    await orca.storage.delete(LEDGER_KEY)
-    post(orca, 'mistral.updated', { fetchedAt: Date.now() })
-    return jsonSafe(await status(orca))
-  })
-
   orca.commands.register('mistral.refresh', async () => {
     const value = await status(orca, { force: true })
     await updateStatusBar(orca, value)
-    return value.configured
-      ? `Mistral ${value.account.plan ?? 'API'}: plugin calls ${formatUSD(value.ledger.today)} today · ${formatUSD(value.ledger.month)} this month`
-      : 'Mistral: no API key configured'
+    return accountSummary(value)
   })
 
   orca.commands.register('mistral.test', async () => {
     const value = await status(orca, { force: true })
-    const body = value.account.ok
-      ? `${value.account.plan ?? 'API'} · ${value.account.windows
-          .map((window) => `${window.label} ${(window.percent ?? 0).toFixed(1)}%`)
-          .join(' · ')}`
-      : value.account.error ?? 'No account data.'
+    const body = accountSummary(value)
     try {
       await orca.host.call('notifications.show', { title: 'Mistral connection', body })
     } catch {
       // Notifications are optional.
     }
     return body
-  })
-
-  orca.commands.register('mistral.clearLedger', async () => {
-    await orca.storage.delete(LEDGER_KEY)
-    post(orca, 'mistral.updated', { fetchedAt: Date.now() })
-    return 'Mistral: local cost ledger cleared'
   })
 
   orca.hooks.on('agent.launch.before', async (event, next) => {

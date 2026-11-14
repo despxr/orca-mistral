@@ -126,41 +126,7 @@ test('answers a JSON-safe status with no key', async () => {
   await w.deactivate()
 })
 
-test('records an OCR call in the ledger at the page rate', async () => {
-  const fake = stubFetch({
-    '/v1/billing/budget': budget,
-    '/v1/billing/subscription': { plan_name: 'INDIVIDUAL' },
-    '/v1/models': listing,
-    '/v1/ocr': { pages: [{ markdown: '# Invoice' }], usage_info: { pages_processed: 2 } }
-  })
-  try {
-    const host = mockHost({ secrets: { apiKey: 'test-key' } })
-    const w = await mountWorker(worker, { host })
-
-    const result = await w.request('mistral.ocr', { source: 'https://example.com/invoice.pdf' })
-    assert.equal(result.ok, true)
-    if (result.ok) {
-      assert.equal(result.markdown, '# Invoice')
-      assert.equal(result.pages, 2)
-      assert.equal(Number(result.cost.toFixed(6)), 0.008)
-      assert.equal(result.priced, true)
-      assertJsonValue(result)
-    }
-
-    const status = await w.request('mistral.status', {})
-    assert.equal(status.ledger.entries.length, 1)
-    assert.equal(status.ledger.entries[0].kind, 'ocr')
-    assert.equal(Number(status.ledger.today.toFixed(6)), 0.008)
-
-    const stored = host.data().storage.ledger
-    assert.equal(Array.isArray(stored) ? stored.length : 0, 1)
-    await w.deactivate()
-  } finally {
-    fake.restore()
-  }
-})
-
-test('injects the API key into the agents it is told to', async () => {
+test('injects the API key and launch arguments into the agents it is told to', async () => {
   const host = mockHost({
     secrets: { apiKey: 'test-key' },
     settings: { launchArgs: '{"pi":"--model mistral-responses/deepseek-v4-1-flash-1017"}' }
@@ -194,16 +160,22 @@ test('injects the API key into the agents it is told to', async () => {
   await w.deactivate()
 })
 
-test('clears the local ledger', async () => {
-  const host = mockHost({
-    secrets: { apiKey: 'test-key' },
-    storage: {
-      ledger: [{ at: Date.now(), kind: 'ocr', model: 'mistral-ocr-latest', cost: 0.004, priced: true }]
-    }
+test('the refresh command drives the status bar', async () => {
+  const fake = stubFetch({
+    '/v1/billing/budget': budget,
+    '/v1/billing/subscription': { plan_name: 'INDIVIDUAL' },
+    '/v1/models': listing
   })
-  const w = await mountWorker(worker, { host })
-  const status = await w.request('mistral.clearLedger', {})
-  assert.equal(status.ledger.entries.length, 0)
-  assert.equal(host.data().storage.ledger, undefined)
-  await w.deactivate()
+  try {
+    const host = mockHost({ secrets: { apiKey: 'test-key' } })
+    const w = await mountWorker(worker, { host })
+    const summary = await w.command('mistral.refresh')
+    assert.ok(String(summary).includes('Vibe budget'))
+    const updates = host.callsOf('statusBar.update') as { text?: string; visible?: boolean }[]
+    assert.ok(updates.some((call) => typeof call.text === 'string' && call.text.includes('/')))
+    assert.deepEqual(w.refusals, [])
+    await w.deactivate()
+  } finally {
+    fake.restore()
+  }
 })

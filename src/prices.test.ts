@@ -1,6 +1,6 @@
 import { assert, test } from 'orca/testing'
 import { groupModels, type ApiModel } from './models'
-import { cacheSavings, costOf, formatMoney, formatUSD, parseOverrides, priceFor } from './prices'
+import { costOf, formatMoney, formatUSD, parseOverrides, priceFor } from './prices'
 
 test('prices a chat turn and its cache reads', () => {
   const full = costOf('mistral-large-4', { inputTokens: 1_000_000, outputTokens: 1_000_000 })
@@ -9,7 +9,6 @@ test('prices a chat turn and its cache reads', () => {
 
   const cached = costOf('mistral-large-4', { inputTokens: 1_000_000, cacheReadTokens: 1_000_000 })
   assert.equal(Number(cached.total.toFixed(6)), 0.07)
-  assert.equal(Number(cacheSavings('mistral-large-4', { inputTokens: 1_000_000, cacheReadTokens: 1_000_000 }).toFixed(6)), 0.63)
 })
 
 test('prices OCR per page and embeddings per token', () => {

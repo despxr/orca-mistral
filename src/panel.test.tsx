@@ -2,14 +2,13 @@ import { assert, mockHost, mount, test } from 'orca/testing'
 import * as panel from './panel'
 import { connectedStatus, emptyStatus } from './fixtures'
 
-test('shows the account budget and the local ledger', async () => {
+test('shows the account budget', async () => {
   const host = mockHost({ requests: { 'mistral.status': connectedStatus } })
   const view = await mount(panel, { host })
 
   assert.ok(view.find({ text: /Account budget/ }))
   assert.ok(view.find({ label: /Vibe budget/ }))
   assert.ok(view.find({ label: /API budget/ }))
-  assert.ok(view.find({ text: /This plugin's calls/ }))
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.refusals, [])
   await view.unmount()
