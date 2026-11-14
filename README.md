@@ -13,8 +13,9 @@ the credential**.
   the Vibe and API allowance windows, percentage used, reset date and plan, in
   the currency Mistral returns. This is the authoritative account-level number,
   covering agents and every other client on the key.
-- **Status bar** — the highest-used budget window, such as `€94.77 / €255.00`,
-  with a warning at 75% and danger at 90%. The tooltip lists both windows.
+- **Status bar** — two items: the highest-used budget window, such as
+  `€94.77 / €255.00` (warning at 75%, danger at 90%), and the pi cache hit rate,
+  such as `99% cache`. The tooltips list both budget windows and the cache cost.
 - **Cache** — pi's own Mistral usage records, read from `~/.pi/agent/sessions`:
   cache hit rate, cached vs uncached input, output, cost and what the cache saved,
   with per-model, per-day and recent-session tables. This is pi's record of the

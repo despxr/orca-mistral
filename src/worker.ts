@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { OrcaWorkerApi } from 'orca/worker'
 import { groupModels, fallbackModels, type ApiModel, type ModelInfo } from './models'
-import { costOf, formatMoney, parseOverrides, priceFor, PRICES_UPDATED, type Price } from './prices'
+import { costOf, formatMoney, formatUSD, parseOverrides, priceFor, PRICES_UPDATED, type Price } from './prices'
 import type {
   AccountStatus,
   BudgetWindow,
@@ -306,7 +306,26 @@ async function safeStatusBar(orca: OrcaWorkerApi, params: Record<string, unknown
 
 async function updateStatusBar(orca: OrcaWorkerApi, value: Status): Promise<void> {
   const settings = await readSettings(orca)
-  if (!value.configured || bool(settings, 'showStatusBar', true) === false) {
+  if (bool(settings, 'showStatusBar', true) === false) {
+    await safeStatusBar(orca, { id: 'spend', visible: false })
+    await safeStatusBar(orca, { id: 'cache', visible: false })
+    return
+  }
+
+  const cache = await cacheStats(orca)
+  if (cache.ok && cache.turns > 0) {
+    await safeStatusBar(orca, {
+      id: 'cache',
+      text: `${Math.round(cache.hitRate * 100)}% cache`,
+      tone: cache.hitRate >= 0.8 ? 'success' : cache.hitRate >= 0.5 ? 'neutral' : 'warning',
+      tooltip: `pi/Mistral cache: ${(cache.hitRate * 100).toFixed(1)}% hit · ${formatUSD(cache.cost)} cost · ${formatUSD(cache.saved)} saved (est.)`,
+      visible: true
+    })
+  } else {
+    await safeStatusBar(orca, { id: 'cache', visible: false })
+  }
+
+  if (!value.configured) {
     await safeStatusBar(orca, { id: 'spend', visible: false })
     return
   }
@@ -338,8 +357,10 @@ async function primeStatusBar(orca: OrcaWorkerApi): Promise<void> {
     const { key } = await apiKey(orca, settings)
     if (key === null || bool(settings, 'showStatusBar', true) === false) {
       await safeStatusBar(orca, { id: 'spend', visible: false })
+      await safeStatusBar(orca, { id: 'cache', visible: false })
       return
     }
+    await safeStatusBar(orca, { id: 'cache', visible: false })
     await safeStatusBar(orca, {
       id: 'spend',
       text: 'Mistral',

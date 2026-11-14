@@ -50,6 +50,14 @@
         "tone": "neutral",
         "tooltip": "Mistral budget and usage",
         "command": "mistral.refresh"
+      },
+      {
+        "id": "cache",
+        "text": "cache",
+        "icon": "database",
+        "tone": "neutral",
+        "tooltip": "pi/Mistral cache hit rate",
+        "command": "mistral.refresh"
       }
     ],
     "settings": [
