@@ -1,0 +1,159 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
+  "manifestVersion": 2,
+  "id": "mistral",
+  "name": "Mistral",
+  "version": "1.0.0",
+  "description": "Mistral account budget, live model catalog, per-call cost ledger, OCR, embeddings and fill-in-the-middle, plus MISTRAL_API_KEY injection for the agents Orca launches.",
+  "author": {
+    "name": "despxr",
+    "url": "https://github.com/despxr"
+  },
+  "repository": "https://github.com/despxr/orca-mistral",
+  "license": "MIT",
+  "icon": "assets/icon.png",
+  "cover": {
+    "path": "assets/cover.png",
+    "alt": "The Mistral panel showing a Vibe budget bar, API budget bar and today's estimated spend"
+  },
+  "engines": {
+    "orca": ">=1.4.248"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "mistral",
+        "title": "Mistral",
+        "icon": "gauge",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "commands": [
+      {
+        "id": "mistral.refresh",
+        "title": "Mistral: Refresh usage and budget"
+      },
+      {
+        "id": "mistral.test",
+        "title": "Mistral: Test connection"
+      },
+      {
+        "id": "mistral.clearLedger",
+        "title": "Mistral: Clear local cost ledger"
+      }
+    ],
+    "statusBarItems": [
+      {
+        "id": "spend",
+        "text": "Mistral",
+        "icon": "gauge",
+        "tone": "neutral",
+        "tooltip": "Mistral usage and budget",
+        "command": "mistral.refresh"
+      }
+    ],
+    "settings": [
+      {
+        "key": "baseURL",
+        "title": "API endpoint",
+        "description": "Mistral API base URL. Change it only for a proxy or a compatible gateway.",
+        "type": "string",
+        "default": "https://api.mistral.ai/v1"
+      },
+      {
+        "key": "apiKeyEnv",
+        "title": "API key environment variable",
+        "description": "Read when no key is stored in Orca's secrets.",
+        "type": "string",
+        "default": "MISTRAL_API_KEY"
+      },
+      {
+        "key": "refreshMinutes",
+        "title": "Refresh interval (minutes)",
+        "description": "How often the worker refreshes the budget and the status bar.",
+        "type": "integer",
+        "default": 15,
+        "minimum": 1,
+        "maximum": 1440
+      },
+      {
+        "key": "showStatusBar",
+        "title": "Show today's spend in the status bar",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "injectApiKey",
+        "title": "Inject MISTRAL_API_KEY into launched agents",
+        "description": "Adds the stored key to the environment of agents Orca launches, so their Mistral provider works without a shell export.",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "injectAgents",
+        "title": "Agents that receive the key",
+        "description": "Comma-separated agent ids, such as pi,dsh,hermes,opencode. Empty injects into every agent.",
+        "type": "string",
+        "default": "pi,dsh,hermes,opencode,opencode2,qwen-code"
+      },
+      {
+        "key": "launchArgs",
+        "title": "Extra arguments per agent",
+        "description": "JSON object mapping an agent id to CLI arguments appended at launch, such as {\"pi\":\"--model mistral-responses/deepseek-v4-1-flash-1017\"}.",
+        "type": "string",
+        "multiline": true,
+        "default": "{}"
+      },
+      {
+        "key": "ocrModel",
+        "title": "OCR model",
+        "type": "string",
+        "default": "mistral-ocr-latest"
+      },
+      {
+        "key": "embedModel",
+        "title": "Embedding model",
+        "type": "string",
+        "default": "codestral-embed"
+      },
+      {
+        "key": "fimModel",
+        "title": "Fill-in-the-middle model",
+        "type": "string",
+        "default": "codestral-latest"
+      },
+      {
+        "key": "priceOverrides",
+        "title": "Price overrides",
+        "description": "JSON object keyed by model id, with input, output, cacheRead, per1000Pages, per1000AnnotatedPages, perMinute or perMillionChars in USD.",
+        "type": "string",
+        "multiline": true,
+        "default": "{}"
+      }
+    ],
+    "hooks": [
+      {
+        "event": "agent.launch.before",
+        "onError": "pass"
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "settings:own"
+    },
+    {
+      "kind": "secrets:own"
+    },
+    {
+      "kind": "notifications:show"
+    }
+  ]
+}
