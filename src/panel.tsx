@@ -331,7 +331,7 @@ function Cache() {
               { label: 'Uncached input', value: formatTokens(stats.inputTokens) },
               { label: 'Output', value: formatTokens(stats.outputTokens) },
               { label: 'Estimated cost', value: formatUSD(stats.cost), tone: 'accent' },
-              { label: 'Saved by cache', value: formatUSD(stats.saved), tone: 'success' },
+              { label: 'Saved by cache (est.)', value: formatUSD(stats.saved), tone: 'success' },
               { label: 'Turns', value: stats.turns },
               { label: 'Sessions', value: stats.sessions }
             ]}
