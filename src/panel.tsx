@@ -25,11 +25,11 @@ import {
   set,
   type PanelContext
 } from 'orca'
-import { costOf, formatContext, formatMoney, formatUSD, PRICES_SOURCE } from './prices'
+import { costOf, formatContext, formatMoney, formatTokens, formatUSD, PRICES_SOURCE } from './prices'
 import type { ModelInfo } from './models'
-import type { Status } from './types'
+import type { CacheStats, Status } from './types'
 
-const tab = atom('tab', 'usage')
+const tab = atom('tab', 'usage', { persist: 'plugin' })
 const status = atom<Status | null>(null)
 const error = atom<string | null>(null)
 const loading = atom(false)
@@ -38,10 +38,18 @@ const keyDraft = atom('keyDraft', '')
 const keyBusy = atom(false)
 const keyMessage = atom<string | null>(null)
 
+const cacheStats = atom<CacheStats | null>(null)
+const cacheLoading = atom(false)
+const cacheError = atom<string | null>(null)
+
 const selectedModel = atom<string | null>(null)
 const calcModel = atom('calcModel', 'mistral-large-4')
 const calcInput = atom('calcInput', '10000')
 const calcOutput = atom('calcOutput', '1000')
+
+function formatPercent(ratio: number): string {
+  return `${(ratio * 100).toFixed(1)}%`
+}
 
 function messageOf(error: unknown): string {
   if (error !== null && typeof error === 'object' && 'message' in error) return String((error as { message: unknown }).message)
@@ -81,6 +89,18 @@ async function saveKey(): Promise<void> {
   }
 }
 
+async function loadCache(): Promise<void> {
+  set(cacheLoading, true)
+  set(cacheError, null)
+  try {
+    set(cacheStats, await plugin.request('mistral.cache', {}))
+  } catch (cause) {
+    set(cacheError, messageOf(cause))
+  } finally {
+    set(cacheLoading, false)
+  }
+}
+
 async function removeKey(): Promise<void> {
   set(keyBusy, true)
   set(keyMessage, null)
@@ -97,6 +117,7 @@ async function removeKey(): Promise<void> {
 export function setup(ctx: PanelContext): void {
   ctx.subscriptions.push(plugin.on('mistral.updated', () => void load(true)))
   void load()
+  if (read(tab) === 'cache') void loadCache()
 }
 
 export default function Panel() {
@@ -125,9 +146,19 @@ export default function Panel() {
       {current === null ? (
         read(loading) ? <Spinner label="Loading Mistral usage" /> : null
       ) : current.configured ? (
-        <Tabs label="Mistral sections" value={read(tab)} onChange={(value) => set(tab, value)}>
+        <Tabs
+          label="Mistral sections"
+          value={read(tab)}
+          onChange={(value) => {
+            set(tab, value)
+            if (value === 'cache' && read(cacheStats) === null) void loadCache()
+          }}
+        >
           <Tab value="usage" label="Usage">
             <Usage value={current} />
+          </Tab>
+          <Tab value="cache" label="Cache">
+            <Cache />
           </Tab>
           <Tab value="models" label="Models">
             <Models value={current} />
@@ -255,6 +286,119 @@ function Usage({ value }: { value: Status }) {
           icon="gauge"
         />
       ) : null}
+    </Stack>
+  )
+}
+
+function Cache() {
+  const stats = read(cacheStats)
+  return (
+    <Stack gap="md">
+      <Row justify="between">
+        <Text weight="semibold">pi / Mistral cache</Text>
+        <IconButton
+          icon="refresh"
+          label="Refresh cache statistics"
+          disabled={read(cacheLoading)}
+          onPress={() => void loadCache()}
+        />
+      </Row>
+
+      {read(cacheError) ? (
+        <Callout tone="danger" title="Could not read pi sessions">
+          {read(cacheError)}
+        </Callout>
+      ) : null}
+
+      {read(cacheLoading) && stats === null ? <Spinner label="Reading pi sessions" /> : null}
+
+      {stats === null ? null : !stats.ok ? (
+        <Callout tone="warning" title="Cache statistics unavailable">
+          {stats.error ?? 'No session directory.'}
+        </Callout>
+      ) : stats.turns === 0 ? (
+        <EmptyState
+          title="No pi/Mistral turns found"
+          description={`Read ${stats.scannedFiles} file(s) under ${stats.dir} over the last ${stats.windowDays} days.`}
+          icon="database"
+        />
+      ) : (
+        <Stack gap="md">
+          <Progress label={`Cache hit rate · ${formatPercent(stats.hitRate)}`} value={Math.round(stats.hitRate * 100)} />
+          <KeyValue
+            items={[
+              { label: 'Cached tokens', value: formatTokens(stats.cacheReadTokens), tone: 'success' },
+              { label: 'Uncached input', value: formatTokens(stats.inputTokens) },
+              { label: 'Output', value: formatTokens(stats.outputTokens) },
+              { label: 'Estimated cost', value: formatUSD(stats.cost), tone: 'accent' },
+              { label: 'Saved by cache', value: formatUSD(stats.saved), tone: 'success' },
+              { label: 'Turns', value: stats.turns },
+              { label: 'Sessions', value: stats.sessions }
+            ]}
+          />
+          <Table
+            label="Cache by model"
+            columns={[
+              { key: 'model', label: 'Model', minWidth: 'md' },
+              { key: 'turns', label: 'Turns', align: 'end' },
+              { key: 'hit', label: 'Hit', align: 'end' },
+              { key: 'cached', label: 'Cached', align: 'end', hideBelow: 'sm' },
+              { key: 'cost', label: 'Cost', align: 'end' }
+            ]}
+            rows={stats.byModel.map((row) => ({
+              key: row.key,
+              cells: {
+                model: row.provider === '' ? row.model : `${row.model} · ${row.provider}`,
+                turns: row.turns,
+                hit: formatPercent(row.hitRate),
+                cached: formatTokens(row.cacheReadTokens),
+                cost: formatUSD(row.cost)
+              }
+            }))}
+          />
+          <Table
+            label="Cache by day"
+            columns={[
+              { key: 'day', label: 'Day' },
+              { key: 'turns', label: 'Turns', align: 'end' },
+              { key: 'hit', label: 'Hit', align: 'end' },
+              { key: 'cost', label: 'Cost', align: 'end' }
+            ]}
+            rows={stats.byDay.map((row) => ({
+              key: row.day,
+              cells: {
+                day: row.day,
+                turns: row.turns,
+                hit: formatPercent(row.hitRate),
+                cost: formatUSD(row.cost)
+              }
+            }))}
+          />
+          <Table
+            label="Recent sessions"
+            columns={[
+              { key: 'session', label: 'Session', minWidth: 'md' },
+              { key: 'updated', label: 'Updated', hideBelow: 'sm' },
+              { key: 'turns', label: 'Turns', align: 'end' },
+              { key: 'hit', label: 'Hit', align: 'end' },
+              { key: 'cost', label: 'Cost', align: 'end' }
+            ]}
+            rows={stats.recent.map((row, index) => ({
+              key: `${row.id}-${index}`,
+              cells: {
+                session: row.id,
+                updated: { type: 'relative' as const, at: row.updatedAt },
+                turns: row.turns,
+                hit: formatPercent(row.hitRate),
+                cost: formatUSD(row.cost)
+              }
+            }))}
+          />
+          <Text size="xs" muted>
+            Read from pi session logs at {stats.dir}. Only usage fields are read; prompts are not stored.
+          </Text>
+        </Stack>
+      )}
     </Stack>
   )
 }

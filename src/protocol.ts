@@ -1,5 +1,5 @@
 // The panel <-> worker contract, declared once: src/panel.tsx and src/worker.ts both read it.
-import type { SaveKeyResult, Status } from './types'
+import type { CacheStats, SaveKeyResult, Status } from './types'
 
 export {}
 
@@ -11,6 +11,8 @@ declare module 'orca' {
     'mistral.saveKey': { input: { key: string }; output: SaveKeyResult }
     /** Removes the stored API key and returns the new status. */
     'mistral.clearKey': { input: Record<string, never>; output: Status }
+    /** pi/Mistral cache hit rate and cost, read from pi's local session logs. */
+    'mistral.cache': { input: Record<string, never>; output: CacheStats }
   }
   interface PluginPanelEvents {
     /** Posted after the worker refreshed its account data. */

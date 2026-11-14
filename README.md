@@ -15,6 +15,10 @@ the credential**.
   covering agents and every other client on the key.
 - **Status bar** — the highest-used budget window, such as `€94.77 / €255.00`,
   with a warning at 75% and danger at 90%. The tooltip lists both windows.
+- **Cache** — pi's own Mistral usage records, read from `~/.pi/agent/sessions`:
+  cache hit rate, cached vs uncached input, output, cost and what the cache saved,
+  with per-model, per-day and recent-session tables. This is pi's record of the
+  actual API turns, not an estimate from Orca.
 - **Models** — `GET /v1/models`, grouped so aliases collapse into one row, with
   context window, capabilities and input/cached/output prices. Select a row for
   the full price and a cost calculator.
@@ -29,8 +33,10 @@ the credential**.
   empty.
 - It does not add a Mistral provider to Orca's model picker. That is not a plugin
   contribution point.
-- It does not see per-agent token usage. The account budget is the only
-  all-client number; Orca plugins cannot read an agent's API calls.
+- It does not see per-agent token usage through Orca. The account budget is the
+  all-client number; the Cache tab reads pi's local session logs instead. Orca
+  has no cache-hit-rate API, and `agent.listSessions` gives token totals without
+  a cache breakdown.
 - It does not configure a harness for Mistral. The hook supplies the key and
   optional args; the harness still needs its Mistral provider.
 
@@ -63,6 +69,9 @@ fallback.
 | `injectApiKey` | `true` | Add the key to launched agents' environment. |
 | `injectAgents` | `pi,dsh,hermes,opencode,opencode2` | Agent ids that read the key; empty means all. |
 | `launchArgs` | `{}` | JSON map of agent id to CLI arguments appended at launch. |
+| `piSessionsDir` | `~/.pi/agent/sessions` | pi session logs for the Cache tab; empty disables it. |
+| `cacheWindowDays` | `30` | Only session files modified within this many days are read. |
+| `piProviderMatch` | `mistral` | Only turns whose provider or model contains this text. |
 | `priceOverrides` | `{}` | JSON price rows for models newer than the bundled table. |
 
 A price override is keyed by model id and takes any of `input`, `output`,
@@ -121,8 +130,15 @@ orca plugin shot . --scenario connected   # a PNG of the panel
 ```
 
 `src/prices.ts` is the price table and cost math, `src/models.ts` groups the live
-catalog, `src/worker.ts` owns the API calls and the hook, and `src/panel.tsx` is
-the components panel. No build step: Orca transpiles the TypeScript and TSX.
+catalog, `src/worker.ts` owns the API calls, the pi session reader and the hook,
+and `src/panel.tsx` is the components panel. No build step: Orca transpiles the
+TypeScript and TSX.
+
+The Cache tab reads pi's JSONL session files with Node's `fs`/`readline`, keeps
+only the usage fields (`input`, `cacheRead`, `cacheWrite`, `output`, `cost`,
+provider, model, timestamp), and never stores or displays prompts. It reads at
+most 500 files modified inside the window. dsh (zstd JSONL) and Hermes (SQLite)
+could be added the same way; they are not read today.
 
 ## License
 

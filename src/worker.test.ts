@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { assert, mockHost, mountWorker, test } from 'orca/testing'
 import * as worker from './worker'
 
@@ -158,6 +161,64 @@ test('injects the API key and launch arguments into the agents it is told to', a
   if (claude.kind === 'continue') assert.equal(claude.event.env.MISTRAL_API_KEY, undefined)
 
   await w.deactivate()
+})
+
+test('reads pi cache hit rate and cost', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'orca-mistral-cache-'))
+  try {
+    const mistralTurn = {
+      type: 'message',
+      timestamp: new Date().toISOString(),
+      message: {
+        role: 'assistant',
+        provider: 'mistral-responses',
+        model: 'deepseek-v4-1-flash-1017',
+        usage: {
+          input: 274,
+          output: 3,
+          cacheRead: 2944,
+          cacheWrite: 0,
+          reasoning: 0,
+          totalTokens: 3221,
+          cost: { total: 0.000106408 }
+        }
+      }
+    }
+    const otherTurn = {
+      type: 'message',
+      timestamp: new Date().toISOString(),
+      message: {
+        role: 'assistant',
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5',
+        usage: { input: 1000, output: 100, cacheRead: 0, cacheWrite: 0, totalTokens: 1100 }
+      }
+    }
+    await writeFile(join(dir, 'session.jsonl'), `${JSON.stringify(mistralTurn)}\n${JSON.stringify(otherTurn)}\n`)
+
+    const host = mockHost({
+      settings: { piSessionsDir: dir, cacheWindowDays: 30, piProviderMatch: 'mistral' }
+    })
+    const w = await mountWorker(worker, { host })
+    const stats = await w.request('mistral.cache', {})
+
+    assert.equal(stats.ok, true)
+    assert.equal(stats.scannedFiles, 1)
+    assert.equal(stats.turns, 1)
+    assert.equal(stats.sessions, 1)
+    assert.equal(stats.inputTokens, 274)
+    assert.equal(stats.cacheReadTokens, 2944)
+    assert.equal(Number(stats.hitRate.toFixed(4)), Number((2944 / 3218).toFixed(4)))
+    assert.equal(Number(stats.cost.toFixed(9)), 0.000106408)
+    assert.ok(stats.saved > 0)
+    assert.equal(stats.byModel[0].model, 'deepseek-v4-1-flash-1017')
+    assert.equal(stats.byModel[0].provider, 'mistral-responses')
+    assertJsonValue(stats)
+    assert.deepEqual(w.refusals, [])
+    await w.deactivate()
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })
 
 test('the refresh command drives the status bar', async () => {

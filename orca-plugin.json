@@ -105,6 +105,29 @@
         "default": "{}"
       },
       {
+        "key": "piSessionsDir",
+        "title": "pi session logs",
+        "description": "Directory of pi session JSONL files used for the cache hit rate. Empty disables the cache tab.",
+        "type": "string",
+        "default": "~/.pi/agent/sessions"
+      },
+      {
+        "key": "cacheWindowDays",
+        "title": "Cache window (days)",
+        "description": "Only session files modified within this many days are read.",
+        "type": "integer",
+        "default": 30,
+        "minimum": 1,
+        "maximum": 365
+      },
+      {
+        "key": "piProviderMatch",
+        "title": "pi provider filter",
+        "description": "Only turns whose provider or model contains this text, case-insensitive. Default mistral.",
+        "type": "string",
+        "default": "mistral"
+      },
+      {
         "key": "priceOverrides",
         "title": "Price overrides",
         "description": "JSON object keyed by model id, with input, output, cacheRead, per1000Pages, per1000AnnotatedPages, perMinute or perMillionChars in USD.",

@@ -5,10 +5,24 @@
  * catalog with prices, drives the status bar, and injects the API key into the
  * agents Orca launches.
  */
+import { createReadStream } from 'node:fs'
+import { readdir, stat } from 'node:fs/promises'
+import { join } from 'node:path'
+import { createInterface } from 'node:readline'
 import type { OrcaWorkerApi } from 'orca/worker'
 import { groupModels, fallbackModels, type ApiModel, type ModelInfo } from './models'
-import { formatMoney, parseOverrides, PRICES_UPDATED, type Price } from './prices'
-import type { AccountStatus, BudgetWindow, Protection, SaveKeyResult, Status } from './types'
+import { costOf, formatMoney, parseOverrides, priceFor, PRICES_UPDATED, type Price } from './prices'
+import type {
+  AccountStatus,
+  BudgetWindow,
+  CacheDayRow,
+  CacheModelRow,
+  CacheSessionRow,
+  CacheStats,
+  Protection,
+  SaveKeyResult,
+  Status
+} from './types'
 
 declare const process: { env: Record<string, string | undefined> }
 
@@ -211,6 +225,7 @@ let modelsCache: { at: number; key: string; value: ModelInfo[] } | null = null
 function invalidate(): void {
   billingCache = null
   modelsCache = null
+  cacheStatsCache = null
 }
 
 async function status(orca: OrcaWorkerApi, { force = false } = {}): Promise<Status> {
@@ -368,6 +383,345 @@ function launchArgsFor(settings: Settings, agent: string): string {
   }
 }
 
+type PiTurn = {
+  file: string
+  at: number
+  provider: string
+  model: string
+  input: number
+  cacheRead: number
+  cacheWrite: number
+  output: number
+  reasoning: number
+  total: number
+  cost: number
+  saved: number
+}
+
+type ModelAccumulator = {
+  provider: string
+  model: string
+  turns: number
+  inputTokens: number
+  cacheReadTokens: number
+  outputTokens: number
+  cost: number
+  saved: number
+}
+
+type DayAccumulator = {
+  turns: number
+  inputTokens: number
+  cacheReadTokens: number
+  cost: number
+}
+
+type SessionAccumulator = {
+  updatedAt: number
+  turns: number
+  inputTokens: number
+  cacheReadTokens: number
+  cost: number
+}
+
+function expandHome(path: string): string {
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? ''
+  if (path === '~') return home
+  if (path.startsWith('~/') || path.startsWith('~\\')) return `${home}${path.slice(1)}`
+  return path
+}
+
+function baseName(path: string): string {
+  const parts = path.replace(/\\/g, '/').split('/')
+  return parts[parts.length - 1] ?? path
+}
+
+async function collectPiFiles(dir: string, since: number): Promise<string[]> {
+  const files: { path: string; mtime: number }[] = []
+  async function walk(path: string, depth: number): Promise<void> {
+    if (depth > 4) return
+    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>
+    try {
+      entries = await readdir(path, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const child = join(path, entry.name)
+      if (entry.isDirectory()) {
+        await walk(child, depth + 1)
+        continue
+      }
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
+      try {
+        const info = await stat(child)
+        if (info.mtimeMs >= since) files.push({ path: child, mtime: info.mtimeMs })
+      } catch {
+        // A file that vanished between readdir and stat is not a problem.
+      }
+    }
+  }
+  await walk(dir, 0)
+  return files
+    .sort((a, b) => b.mtime - a.mtime)
+    .slice(0, 500)
+    .map((entry) => entry.path)
+}
+
+async function readPiTurns(
+  file: string,
+  needle: string,
+  since: number,
+  overrides: Record<string, Price>
+): Promise<PiTurn[]> {
+  const turns: PiTurn[] = []
+  let stream: any
+  try {
+    stream = createReadStream(file, { encoding: 'utf8' })
+  } catch {
+    return turns
+  }
+  const reader = createInterface({ input: stream, crlfDelay: Infinity })
+  try {
+    for await (const line of reader) {
+      if (!line.includes('"usage"')) continue
+      if (needle !== '' && !line.toLowerCase().includes(needle)) continue
+      let row: unknown
+      try {
+        row = JSON.parse(line)
+      } catch {
+        continue
+      }
+      const record = recordOf(row)
+      const message = recordOf(record?.message)
+      if (message === null || message.role !== 'assistant') continue
+      const usage = recordOf(message.usage)
+      if (usage === null) continue
+      const provider = String(message.provider ?? '')
+      const model = String(message.model ?? '')
+      if (needle !== '' && !`${provider} ${model}`.toLowerCase().includes(needle)) continue
+      const rawAt = record?.timestamp ?? message.timestamp
+      const at = typeof rawAt === 'number' ? rawAt : Date.parse(String(rawAt ?? '')) || 0
+      if (at < since) continue
+
+      const input = nonNegative(usage.input)
+      const cacheRead = nonNegative(usage.cacheRead)
+      const cacheWrite = nonNegative(usage.cacheWrite)
+      const output = nonNegative(usage.output)
+      const reasoning = nonNegative(usage.reasoning)
+      const total = nonNegative(usage.totalTokens) || input + cacheRead + output + reasoning
+      const piCost = nonNegative(recordOf(usage.cost)?.total)
+      const fallback = costOf(
+        model,
+        { inputTokens: input + cacheRead, outputTokens: output, cacheReadTokens: cacheRead },
+        overrides
+      )
+      const cost = piCost > 0 ? piCost : fallback.total
+      const price = priceFor(model, overrides)
+      const saved =
+        price === null
+          ? 0
+          : (cacheRead * Math.max(0, (price.input ?? 0) - (price.cacheRead ?? price.input ?? 0))) / 1_000_000
+
+      turns.push({ file, at, provider, model, input, cacheRead, cacheWrite, output, reasoning, total, cost, saved })
+    }
+  } finally {
+    reader.close()
+    stream.destroy?.()
+  }
+  return turns
+}
+
+function summarizeCache(turns: PiTurn[], dir: string, windowDays: number, scannedFiles: number): CacheStats {
+  const byModel = new Map<string, ModelAccumulator>()
+  const byDay = new Map<string, DayAccumulator>()
+  const bySession = new Map<string, SessionAccumulator>()
+  let inputTokens = 0
+  let cacheReadTokens = 0
+  let cacheWriteTokens = 0
+  let outputTokens = 0
+  let cost = 0
+  let saved = 0
+
+  for (const turn of turns) {
+    inputTokens += turn.input
+    cacheReadTokens += turn.cacheRead
+    cacheWriteTokens += turn.cacheWrite
+    outputTokens += turn.output
+    cost += turn.cost
+    saved += turn.saved
+
+    const modelKey = `${turn.provider}/${turn.model}`
+    const model = byModel.get(modelKey) ?? {
+      provider: turn.provider,
+      model: turn.model,
+      turns: 0,
+      inputTokens: 0,
+      cacheReadTokens: 0,
+      outputTokens: 0,
+      cost: 0,
+      saved: 0
+    }
+    model.turns += 1
+    model.inputTokens += turn.input
+    model.cacheReadTokens += turn.cacheRead
+    model.outputTokens += turn.output
+    model.cost += turn.cost
+    model.saved += turn.saved
+    byModel.set(modelKey, model)
+
+    const dayKey = new Date(turn.at).toISOString().slice(0, 10)
+    const day = byDay.get(dayKey) ?? { turns: 0, inputTokens: 0, cacheReadTokens: 0, cost: 0 }
+    day.turns += 1
+    day.inputTokens += turn.input
+    day.cacheReadTokens += turn.cacheRead
+    day.cost += turn.cost
+    byDay.set(dayKey, day)
+
+    const session = bySession.get(turn.file) ?? {
+      updatedAt: 0,
+      turns: 0,
+      inputTokens: 0,
+      cacheReadTokens: 0,
+      cost: 0
+    }
+    session.updatedAt = Math.max(session.updatedAt, turn.at)
+    session.turns += 1
+    session.inputTokens += turn.input
+    session.cacheReadTokens += turn.cacheRead
+    session.cost += turn.cost
+    bySession.set(turn.file, session)
+  }
+
+  const prompt = inputTokens + cacheReadTokens
+  const hitRate = prompt > 0 ? cacheReadTokens / prompt : 0
+
+  const modelRows: CacheModelRow[] = [...byModel.entries()]
+    .map(([key, row]) => {
+      const rowPrompt = row.inputTokens + row.cacheReadTokens
+      return {
+        key,
+        provider: row.provider,
+        model: row.model,
+        turns: row.turns,
+        inputTokens: row.inputTokens,
+        cacheReadTokens: row.cacheReadTokens,
+        outputTokens: row.outputTokens,
+        hitRate: rowPrompt > 0 ? row.cacheReadTokens / rowPrompt : 0,
+        cost: row.cost,
+        saved: row.saved
+      }
+    })
+    .sort((a, b) => b.cost - a.cost || b.turns - a.turns)
+    .slice(0, 20)
+
+  const dayRows: CacheDayRow[] = [...byDay.entries()]
+    .map(([day, row]) => {
+      const rowPrompt = row.inputTokens + row.cacheReadTokens
+      return {
+        day,
+        turns: row.turns,
+        inputTokens: row.inputTokens,
+        cacheReadTokens: row.cacheReadTokens,
+        hitRate: rowPrompt > 0 ? row.cacheReadTokens / rowPrompt : 0,
+        cost: row.cost
+      }
+    })
+    .sort((a, b) => b.day.localeCompare(a.day))
+    .slice(0, 30)
+
+  const sessionRows: CacheSessionRow[] = [...bySession.entries()]
+    .map(([file, row]) => {
+      const rowPrompt = row.inputTokens + row.cacheReadTokens
+      return {
+        id: baseName(file).replace(/\.jsonl$/, ''),
+        updatedAt: row.updatedAt,
+        turns: row.turns,
+        hitRate: rowPrompt > 0 ? row.cacheReadTokens / rowPrompt : 0,
+        cost: row.cost
+      }
+    })
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 10)
+
+  return {
+    ok: true,
+    dir,
+    windowDays,
+    scannedFiles,
+    sessions: bySession.size,
+    turns: turns.length,
+    inputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    outputTokens,
+    hitRate,
+    cost,
+    saved,
+    byModel: modelRows,
+    byDay: dayRows,
+    recent: sessionRows,
+    fetchedAt: Date.now()
+  }
+}
+
+let cacheStatsCache: { at: number; key: string; value: CacheStats } | null = null
+
+async function cacheStats(orca: OrcaWorkerApi, { force = false } = {}): Promise<CacheStats> {
+  const settings = await readSettings(orca)
+  const overrides = parseOverrides(settings.priceOverrides)
+  const dir = expandHome(str(settings, 'piSessionsDir', '~/.pi/agent/sessions'))
+  const windowDays = clamp(Number(settings.cacheWindowDays) || 30, 1, 365)
+  const needle = str(settings, 'piProviderMatch', 'mistral').toLowerCase()
+  const empty = (error?: string): CacheStats => ({
+    ok: error === undefined,
+    dir,
+    windowDays,
+    scannedFiles: 0,
+    sessions: 0,
+    turns: 0,
+    inputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    outputTokens: 0,
+    hitRate: 0,
+    cost: 0,
+    saved: 0,
+    byModel: [],
+    byDay: [],
+    recent: [],
+    error,
+    fetchedAt: Date.now()
+  })
+
+  if (dir === '') return empty('pi session scanning is disabled')
+  const key = `${dir}|${windowDays}|${needle}`
+  if (
+    !force &&
+    cacheStatsCache !== null &&
+    cacheStatsCache.key === key &&
+    Date.now() - cacheStatsCache.at < 60_000
+  ) {
+    return cacheStatsCache.value
+  }
+  try {
+    const info = await stat(dir)
+    if (!info.isDirectory()) return empty(`${dir} is not a directory`)
+  } catch {
+    return empty(`${dir} was not found`)
+  }
+
+  const since = Date.now() - windowDays * 86_400_000
+  const files = await collectPiFiles(dir, since)
+  const turns: PiTurn[] = []
+  for (const file of files) {
+    turns.push(...(await readPiTurns(file, needle, since, overrides)))
+  }
+  const value = summarizeCache(turns, dir, windowDays, files.length)
+  cacheStatsCache = { at: Date.now(), key, value }
+  return value
+}
+
 let pollTimer: NodeTimer | undefined
 let firstTimer: NodeTimer | undefined
 let stopped = false
@@ -417,6 +771,8 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     await updateStatusBar(orca, next)
     return jsonSafe(next)
   })
+
+  orca.panels.handle('mistral.cache', async () => jsonSafe(await cacheStats(orca)))
 
   orca.commands.register('mistral.refresh', async () => {
     const value = await status(orca, { force: true })

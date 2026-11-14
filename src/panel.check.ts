@@ -1,5 +1,5 @@
 import { defineCheck } from 'orca/testing'
-import { connectedStatus, emptyStatus } from './fixtures'
+import { cacheFixture, connectedStatus, emptyStatus } from './fixtures'
 
 export default defineCheck({
   connect: {
@@ -10,6 +10,13 @@ export default defineCheck({
   connected: {
     requests: {
       'mistral.status': connectedStatus
+    }
+  },
+  cache: {
+    persisted: { plugin: { tab: 'cache' } },
+    requests: {
+      'mistral.status': connectedStatus,
+      'mistral.cache': cacheFixture
     }
   }
 })

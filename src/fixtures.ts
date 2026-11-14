@@ -1,6 +1,6 @@
 /** Status fixtures for tests and `orca plugin check` scenarios. */
 import { priceFor } from './prices'
-import type { Status } from './types'
+import type { CacheStats, Status } from './types'
 
 function model(id: string, name: string, context: number, caps: string[]) {
   return {
@@ -76,5 +76,56 @@ export const connectedStatus: Status = {
   ],
   modelsSource: 'live',
   pricesUpdated: '2026-11-15',
+  fetchedAt: Date.now()
+}
+
+export const cacheFixture: CacheStats = {
+  ok: true,
+  dir: '~/.pi/agent/sessions',
+  windowDays: 30,
+  scannedFiles: 12,
+  sessions: 4,
+  turns: 128,
+  inputTokens: 180_000,
+  cacheReadTokens: 1_420_000,
+  cacheWriteTokens: 0,
+  outputTokens: 42_000,
+  hitRate: 1_420_000 / 1_600_000,
+  cost: 0.92,
+  saved: 0.41,
+  byModel: [
+    {
+      key: 'mistral-responses/deepseek-v4-1-flash-1017',
+      provider: 'mistral-responses',
+      model: 'deepseek-v4-1-flash-1017',
+      turns: 96,
+      inputTokens: 120_000,
+      cacheReadTokens: 1_100_000,
+      outputTokens: 28_000,
+      hitRate: 1_100_000 / 1_220_000,
+      cost: 0.62,
+      saved: 0.31
+    },
+    {
+      key: 'mistral-responses/zai-glm-5-3',
+      provider: 'mistral-responses',
+      model: 'zai-glm-5-3',
+      turns: 32,
+      inputTokens: 60_000,
+      cacheReadTokens: 320_000,
+      outputTokens: 14_000,
+      hitRate: 320_000 / 380_000,
+      cost: 0.3,
+      saved: 0.1
+    }
+  ],
+  byDay: [
+    { day: '2026-11-14', turns: 64, inputTokens: 90_000, cacheReadTokens: 710_000, hitRate: 710_000 / 800_000, cost: 0.5 },
+    { day: '2026-11-13', turns: 64, inputTokens: 90_000, cacheReadTokens: 710_000, hitRate: 710_000 / 800_000, cost: 0.42 }
+  ],
+  recent: [
+    { id: '2026-11-14T23-26-36-228Z_01a1dc62', updatedAt: Date.now() - 3_600_000, turns: 24, hitRate: 0.92, cost: 0.18 },
+    { id: '2026-11-14T20-11-02-118Z_01a1dc11', updatedAt: Date.now() - 7_200_000, turns: 18, hitRate: 0.88, cost: 0.14 }
+  ],
   fetchedAt: Date.now()
 }
