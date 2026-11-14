@@ -3,7 +3,7 @@
   "manifestVersion": 2,
   "id": "mistral",
   "name": "Mistral",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Mistral account budget, live model catalog, per-call cost ledger, OCR, embeddings and fill-in-the-middle, plus MISTRAL_API_KEY injection for the agents Orca launches.",
   "author": {
     "name": "despxr",
@@ -96,9 +96,9 @@
       {
         "key": "injectAgents",
         "title": "Agents that receive the key",
-        "description": "Comma-separated agent ids, such as pi,dsh,hermes,opencode. Empty injects into every agent.",
+        "description": "Comma-separated agent ids that read MISTRAL_API_KEY. Empty injects into every agent; harnesses without Mistral support ignore it.",
         "type": "string",
-        "default": "pi,dsh,hermes,opencode,opencode2,qwen-code"
+        "default": "pi,dsh,hermes,opencode,opencode2"
       },
       {
         "key": "launchArgs",

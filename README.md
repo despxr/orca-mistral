@@ -28,6 +28,46 @@ spend, and three commands are in the palette.
   arguments (for example `--model mistral-responses/deepseek-v4-1-flash-1017`).
   No shell export needed.
 
+## Scope: what the hook can and cannot do
+
+Orca's plugin API has no MCP or tool contribution point yet (`contributes.mcpServers`
+is reserved and must stay empty). So:
+
+- The OCR, embedding and FIM buttons are **yours**: they run from the panel and are
+  recorded in the ledger. Agents do not get `mistral_ocr`-style tools from this
+  plugin.
+- The launch hook only supplies the credential (and optional CLI arguments). It does
+  not add a Mistral provider to a harness. The harness must already know how to use
+  Mistral.
+- The ledger covers this plugin's calls. Per-agent token usage is not visible to
+  Orca plugins; the account budget is the authoritative all-client number.
+
+### Harnesses
+
+`injectAgents` defaults to the harnesses that actually read `MISTRAL_API_KEY`:
+
+| Agent id | Reads the key | What it still needs |
+| --- | --- | --- |
+| `pi` | yes | Built-in `mistral` provider, or `pi-mistral-responses` for reasoning replay. Select with `launchArgs`, e.g. `--model mistral-responses/deepseek-v4-1-flash-1017`. |
+| `dsh` | yes | Built-in `mistral` provider or `dsh-mistral` (`mistral-pro`). Select the provider in the profile's `cordis.patch.yml`; dsh has no `--model` flag. |
+| `hermes` | yes | `hermes-mistral` provider. `launchArgs` example: `--provider mistral --model deepseek-v4-1-flash-1017`. |
+| `opencode`, `opencode2` | yes | Built-in Mistral provider. `launchArgs` example: `--model mistral/mistral-large-latest`. |
+| `claude`, `codex`, `gemini`, … | no | Not injected by default; they do not read `MISTRAL_API_KEY`. |
+
+`launchArgs` is a JSON object keyed by agent id, appended to the launch command:
+
+```json
+{
+  "pi": "--model mistral-responses/deepseek-v4-1-flash-1017",
+  "hermes": "--provider mistral --model deepseek-v4-1-flash-1017",
+  "opencode": "--model mistral/mistral-large-latest"
+}
+```
+
+If a harness is not configured for Mistral, the key is injected but unused; the
+agent starts on its normal provider. Set `injectApiKey` off to disable the hook
+entirely.
+
 ## Install
 
 From the Orca app: **Settings → Plugins → Development folders…** and add this
@@ -54,7 +94,7 @@ set `MISTRAL_API_KEY` in the environment instead; the panel reads it as a fallba
 | `refreshMinutes` | `15` | How often the worker refreshes the budget and status bar. |
 | `showStatusBar` | `true` | Show today's spend in the status bar. |
 | `injectApiKey` | `true` | Add the key to launched agents' environment. |
-| `injectAgents` | `pi,dsh,hermes,opencode,opencode2,qwen-code` | Agent ids that receive it; empty means all. |
+| `injectAgents` | `pi,dsh,hermes,opencode,opencode2` | Agent ids that read the key; empty means all. |
 | `launchArgs` | `{}` | JSON map of agent id to CLI arguments appended at launch, e.g. `{"pi":"--model mistral-responses/deepseek-v4-1-flash-1017"}`. |
 | `ocrModel` | `mistral-ocr-latest` | Model used by the OCR tool. |
 | `embedModel` | `codestral-embed` | Model used by the embeddings tool. |

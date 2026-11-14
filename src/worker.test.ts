@@ -3,6 +3,28 @@ import * as worker from './worker'
 
 type FetchInput = string | URL | Request
 
+function assertJsonValue(value: unknown, path = 'result'): void {
+  if (value === null) return
+  const type = typeof value
+  if (type === 'string' || type === 'boolean') return
+  if (type === 'number') {
+    assert.ok(Number.isFinite(value as number), `${path} is not a finite number`)
+    return
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => assertJsonValue(entry, `${path}[${index}]`))
+    return
+  }
+  if (type === 'object') {
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      assert.notEqual(child, undefined, `${path}.${key} is undefined`)
+      assertJsonValue(child, `${path}.${key}`)
+    }
+    return
+  }
+  assert.fail(`${path} is ${type}`)
+}
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 }
@@ -81,6 +103,7 @@ test('reads the budget and the live catalog', async () => {
     assert.equal(status.models.length, 1)
     assert.equal(status.models[0].id, 'mistral-large-4')
     assert.equal(status.models[0].price?.input, 0.7)
+    assertJsonValue(status)
     assert.deepEqual(w.refusals, [])
 
     await w.deactivate()
@@ -88,6 +111,19 @@ test('reads the budget and the live catalog', async () => {
   } finally {
     fake.restore()
   }
+})
+
+test('answers a JSON-safe status with no key', async () => {
+  const host = mockHost()
+  const w = await mountWorker(worker, { host })
+  const status = await w.request('mistral.status', {})
+  assert.equal(status.configured, false)
+  assert.equal(status.keySource, 'none')
+  assert.equal(status.account.ok, false)
+  assert.ok(status.models.length > 0)
+  assertJsonValue(status)
+  assert.deepEqual(w.refusals, [])
+  await w.deactivate()
 })
 
 test('records an OCR call in the ledger at the page rate', async () => {
@@ -108,6 +144,7 @@ test('records an OCR call in the ledger at the page rate', async () => {
       assert.equal(result.pages, 2)
       assert.equal(Number(result.cost.toFixed(6)), 0.008)
       assert.equal(result.priced, true)
+      assertJsonValue(result)
     }
 
     const status = await w.request('mistral.status', {})

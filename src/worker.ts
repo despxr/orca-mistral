@@ -54,6 +54,23 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/**
+ * The plugin bridge accepts JSON only: no `undefined` members, no NaN or
+ * Infinity. Optional fields are dropped rather than sent as undefined.
+ */
+function jsonSafe<T>(value: T): T {
+  if (value === null || typeof value !== 'object') {
+    return (typeof value === 'number' && !Number.isFinite(value) ? 0 : value) as T
+  }
+  if (Array.isArray(value)) return value.map((entry) => jsonSafe(entry)) as T
+  const out: Record<string, unknown> = {}
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (child === undefined) continue
+    out[key] = jsonSafe(child)
+  }
+  return out as T
+}
+
 function str(settings: Settings, key: string, fallback: string): string {
   const value = settings[key]
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : fallback
@@ -479,7 +496,7 @@ function errorResult(error: unknown, code: string): { ok: false; error: string }
 
 export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   stopped = false
-  orca.panels.handle('mistral.status', async () => status(orca))
+  orca.panels.handle('mistral.status', async () => jsonSafe(await status(orca)))
 
   orca.panels.handle('mistral.saveKey', async ({ key }): Promise<SaveKeyResult> => {
     const value = String(key ?? '').trim()
@@ -495,7 +512,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     invalidate()
     const next = await status(orca, { force: true })
     await updateStatusBar(orca, next)
-    return { ok: true, status: next }
+    return jsonSafe({ ok: true, status: next })
   })
 
   orca.panels.handle('mistral.clearKey', async () => {
@@ -507,7 +524,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     invalidate()
     const next = await status(orca, { force: true })
     await updateStatusBar(orca, next)
-    return next
+    return jsonSafe(next)
   })
 
   orca.panels.handle('mistral.ocr', async ({ source }): Promise<OcrResult> => {
@@ -539,7 +556,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
         cost: cost.total,
         priced: cost.priced,
       })
-      return { ok: true, model, markdown, truncated, pages: pageCount, cost: cost.total, priced: cost.priced }
+      return jsonSafe({ ok: true, model, markdown, truncated, pages: pageCount, cost: cost.total, priced: cost.priced })
     } catch (error) {
       return errorResult(error, 'invalid_params') as OcrResult
     }
@@ -573,7 +590,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
         cost: cost.total,
         priced: cost.priced,
       })
-      return {
+      return jsonSafe({
         ok: true,
         model,
         count: data.length,
@@ -582,7 +599,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
         cost: cost.total,
         priced: cost.priced,
         preview: vector.slice(0, 8).map((n) => Number(Number(n).toFixed(5))),
-      }
+      })
     } catch (error) {
       return errorResult(error, 'invalid_params') as EmbedResult
     }
@@ -624,7 +641,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
         cost: cost.total,
         priced: cost.priced,
       })
-      return { ok: true, model, completion, inputTokens, outputTokens, cost: cost.total, priced: cost.priced }
+      return jsonSafe({ ok: true, model, completion, inputTokens, outputTokens, cost: cost.total, priced: cost.priced })
     } catch (error) {
       return errorResult(error, 'invalid_params') as FimResult
     }
@@ -633,7 +650,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   orca.panels.handle('mistral.clearLedger', async () => {
     await orca.storage.delete(LEDGER_KEY)
     post(orca, 'mistral.updated', { fetchedAt: Date.now() })
-    return status(orca)
+    return jsonSafe(await status(orca))
   })
 
   orca.commands.register('mistral.refresh', async () => {
@@ -679,7 +696,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
 
     if (bool(settings, 'injectApiKey', true)) {
       const { key } = await apiKey(orca, settings)
-      const agents = str(settings, 'injectAgents', 'pi,dsh,hermes,opencode,opencode2,qwen-code')
+      const agents = str(settings, 'injectAgents', 'pi,dsh,hermes,opencode,opencode2')
         .split(',')
         .map((name) => name.trim())
         .filter((name) => name !== '')
