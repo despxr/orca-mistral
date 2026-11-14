@@ -19,6 +19,7 @@ export const emptyStatus: Status = {
   configured: false,
   keySource: 'none',
   protection: 'os-keyring',
+  apiKeyEnv: 'MISTRAL_API_KEY',
   baseURL: 'https://api.mistral.ai/v1',
   account: {
     ok: false,
@@ -37,6 +38,7 @@ export const connectedStatus: Status = {
   configured: true,
   keySource: 'secret',
   protection: 'os-keyring',
+  apiKeyEnv: 'MISTRAL_API_KEY',
   baseURL: 'https://api.mistral.ai/v1',
   account: {
     ok: true,

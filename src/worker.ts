@@ -363,6 +363,7 @@ async function status(orca: OrcaWorkerApi, { force = false } = {}): Promise<Stat
     configured: key !== null,
     keySource: source,
     protection,
+    apiKeyEnv: str(settings, 'apiKeyEnv', DEFAULT_ENV),
     baseURL: base,
     account,
     models,

@@ -3,7 +3,7 @@
   "manifestVersion": 2,
   "id": "mistral",
   "name": "Mistral",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Mistral account budget, live model catalog, per-call cost ledger, OCR, embeddings and fill-in-the-middle, plus MISTRAL_API_KEY injection for the agents Orca launches.",
   "author": {
     "name": "despxr",

@@ -223,7 +223,7 @@ function Connect({ value }: { value: Status }) {
     <Stack gap="md">
       <Callout tone="accent" title="Connect your Mistral account">
         Paste an API key from console.mistral.ai. It is kept in Orca's encrypted secrets; if no OS key
-        store is available, set MISTRAL_API_KEY in the environment instead.
+        store is available, set {value.apiKeyEnv} in the environment instead.
       </Callout>
       <Input
         label="Mistral API key"
@@ -671,7 +671,7 @@ function Account({ value }: { value: Status }) {
                 value.protection === 'os-keyring'
                   ? 'OS keyring'
                   : value.protection === 'unavailable'
-                    ? 'Unavailable — use MISTRAL_API_KEY'
+                    ? `Unavailable — use ${value.apiKeyEnv}`
                     : 'Unknown'
             },
             { label: 'Endpoint', value: value.baseURL, code: true }

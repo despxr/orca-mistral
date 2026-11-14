@@ -53,6 +53,7 @@ export type Status = {
   configured: boolean
   keySource: KeySource
   protection: Protection
+  apiKeyEnv: string
   baseURL: string
   account: AccountStatus
   models: ModelInfo[]
