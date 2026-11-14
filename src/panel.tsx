@@ -147,9 +147,13 @@ function Connect({ value }: { value: Status }) {
   return (
     <Stack gap="md">
       <Callout tone="accent" title="Connect your Mistral account">
-        Paste an API key from console.mistral.ai. It is kept in Orca's encrypted secrets; if no OS key
-        store is available, set {value.apiKeyEnv} in the environment instead.
+        Mistral's API uses bearer API keys; there is no OAuth sign-in. Paste a key from the Mistral
+        Console. It is kept in Orca's encrypted secrets, not in Settings; if no OS key store is
+        available, set {value.apiKeyEnv} in the environment instead.
       </Callout>
+      <Text size="sm">
+        <Link href="https://console.mistral.ai">Get an API key from the Mistral Console</Link>
+      </Text>
       <Input
         label="Mistral API key"
         type="password"
@@ -444,6 +448,10 @@ function Account({ value }: { value: Status }) {
 
       <Stack gap="xs">
         <Text weight="semibold">Links</Text>
+        <Text size="xs" muted>
+          Mistral has no OAuth login for API access, and Orca has no account-connection contribution
+          point yet. The key is stored in the OS keyring through Orca's secrets, not in Settings.
+        </Text>
         <Text size="sm">
           <Link href="https://console.mistral.ai">Mistral Console</Link>
         </Text>
